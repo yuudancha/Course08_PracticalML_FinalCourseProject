@@ -1,0 +1,289 @@
+---
+title: 'Coursera > JHU Data Science Specialization > Course 08: Practical Machine Learning > Course Project: Prediction of Human Activities'
+author: "Dan Charlson"
+date: "2023-07-27"
+output: html_document
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Prediction of Human Activities: Dumbbell Weightlifting
+
+#### Coursera \> JHU Data Science Specialization \> Course 08: Practical Machine Learning \> Course Project
+
+Dan Charlson *coursera\@dancha.com* July 27, 2023
+
+## Executive Summary
+
+In this Practical Machine Learning course, we have surveyed a wide range
+of machine learning techniques. This project involves applying a number
+of those techniques on a data set, comparing their relative levels of
+accuracy, and choosing a "best" one. Specifically, we will train models
+on some Human Activity data (weightlifting). *This is basically a
+supervised classification exercise*. The focus in that original Human
+Activity project was on technique, not reps or weight. A "right
+technique" was designated, with four "wrong techniques." The goal will
+be to ***best identify (most accurately predict) the activities in the
+Test data set exhibiting the*** **correct *technique***.
+
+I will apply these methods:
+
+-   Decision Trees / Recursive Partitioning - *rpart*
+-   Random Forest - *rf*
+-   Gradient Boosted Trees - *gbm*
+-   Model-based Prediction: Linear Discriminant Analysis (LDA) - *lda*
+
+Since both Training and Test Data sets were provided, I will further
+sub-divide Training into Training and Validation sets. I will apply the
+technique of **Cross-Validation** (five-fold) to better estimate
+accuracy on the eventual Test Data set.
+
+Of these, ***Random Forests*** had the highest accuracy on the Training
+data set. (That said, *Gradient Boosted Forests* was less than half a
+percentage point less accurate.)
+
+To complete this course, in addition to the creation, publish, and peer
+review of this report, I will apply my top method/model against a
+specified Test Data Set, and report its findings via the Coursera Quiz
+format (separately from this report).
+
+I did so in the course of creating this report, and am pleased to report
+I attained 100% accuracy on the Quiz.
+
+## About the Assignment
+
+The following text taken verbatim from the Week 4 \> Course Project
+page:
+
+*One thing that people regularly do is quantify how **much** of a
+particular activity they do, but they rarely quantify **how well they do
+it**. In this project, your goal will be to use data from accelerometers
+on the belt, forearm, arm, and dumbbell of 6 participants. The goal of
+your project is to predict the manner in which they did the exercise.
+This is the "classe" variable in the training set. You may use any of
+the other variables to predict with. **You should create a report
+describing how you built your model, how you used cross validation, what
+you think the expected out of sample error is, and why you made the
+choices you did**.*
+
+## About the Data
+
+The data comes from a project and paper called "Wearable Computing:
+Accelerometers' Data Classification of Body Postures and Movements," by
+Ugulino, W.; Cardador, D.; Vega, K.; Velloso, E.; Milidiu, R.; Fuks, H.
+The original website is no longer available, but can be found on the
+Internet Archive:
+
+<http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har>
+
+### Description
+
+"Six young health participants were asked to perform one set of 10
+repetitions of the Unilateral Dumbbell Biceps Curl in five different
+fashions: exactly according to the specification (Class A), throwing the
+elbows to the front (Class B), lifting the dumbbell only halfway (Class
+C), lowering the dumbbell only halfway (Class D) and throwing the hips
+to the front (Class E)."
+
+## Data Processing and Summary
+
+The data set for this Course Project was provided in the Assignment:
+
+*The training data for this project are available here:*
+
+[[https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv]{.underline}](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv)
+
+*The test data are available here:*
+
+<https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv>
+
+### Load any required libraries
+
+```{r libraries}
+# Important note: please perform install.packages ahead of time as required
+library(caret)
+# FYI: as necessary, this will load dependencies: ggplot2 and lattice
+library(rattle)
+```
+
+### Load the data
+
+```{r loaddata}
+setwd("/Users/dancharlson/Dropbox/Courses/Coursera/01 Data Science Specalization (JHU)/08_PracticalMachineLearning/CourseProject")
+training_data <- read.csv("pml-training.csv", na.strings = c("NA", ""))
+test_data <- read.csv("pml-testing.csv", na.strings = c("NA", ""))
+```
+
+### Basic Exploratory Data Analysis
+
+I will start with some basic techniques.
+
+```{r basic_eda}
+dim(training_data)
+dim(test_data)
+```
+
+As expected, they share the same number of columns, but differ vastly in
+the number of observations.
+
+Now for a little more detail:
+
+```{r eda}
+# check out the data
+str(training_data)
+# str(test_data) -- omitted since it's basically the same
+# summary(training_data) -- I usually run this command, too, but the str() was sufficient to detect some issues that will require *data cleaning*
+```
+
+We can see from this alone that there is a LOT of NA data, which I will
+remove.
+
+### Data Cleaning
+
+In these steps I will remove columns with NAs.
+
+```{r cleaning1}
+training_data_cleaned <- training_data[, colSums(is.na(training_data)) == 0]
+test_data_cleaned <- test_data[, colSums(is.na(test_data)) == 0]
+dim(training_data_cleaned)
+dim(test_data_cleaned)
+# From 160 columns down to 60
+```
+
+Additionally, I don't really need columns that are not related to
+exercise. In particular: "X", "user_name", "raw_timestamp_part_1",
+"raw_timestamp_part_2", "cvtd_timestamp", "new_window", "num_window".
+
+```{r cleaning2}
+training_data_cleaned <- training_data_cleaned[,-c(1:7)]
+test_data_cleaned <- test_data_cleaned[, -c(1:7)]
+dim(training_data_cleaned)
+dim(test_data_cleaned)
+# From 60 columns down to 53
+```
+
+## Split the Training Data
+
+This is so we can perform testing without "corrupting" ourselves on the
+designated Test data set.
+
+```{r segmentdata}
+#first set the seed
+set.seed(33833)
+inTrain <- createDataPartition(training_data_cleaned$classe, p = 0.7, list = FALSE)
+trainset <- training_data_cleaned[inTrain, ]
+validset <- training_data_cleaned[-inTrain, ]
+```
+
+## Configure for Cross-validation
+
+I will specify ***five-fold*** cross-validation.
+
+```{r crossvalconfig}
+control <- trainControl(method="cv", number=5, verboseIter=F)
+```
+
+## Training via Different Methodologies
+
+I will apply the following methods. The Pro and Con assessments are
+drawn from the lectures, as well as my own empirical observation while
+preparing this report.
+
+-   Decision Trees / Recursive Partitioning - *rpart*
+    -   Pro: fast
+    -   Con: low(er) accuracy
+-   Random Forest - *rf*
+    -   Pro: high(er) accuracy
+    -   Con: slow (computationally intense)
+-   Gradient Boosted Trees - *gbm*
+    -   Pro: high(er) accuracy
+    -   Con: slow (computationally intense)
+-   Model-based Prediction: Linear Discriminant Analysis (LDA) - *lda*
+    -   Pro: fast
+    -   Con: low(er) accuracy
+
+**Method #1** - I will start with Decision Trees / Recursive
+Partitioning - *rpart*
+
+```{r decisiontrees}
+model_dtrees <- train(classe~., data=trainset, method="rpart", trControl = control, tuneLength = 5)
+# show a fancy tree plot, a la PDF019 in Week 3
+fancyRpartPlot(model_dtrees$finalModel)
+predict_trees <- predict(model_dtrees, validset)
+confmatrix_dtrees <- confusionMatrix(predict_trees, factor(validset$classe))
+confmatrix_dtrees
+```
+
+Its overall Accuracy was **53.41%**.
+
+**Method #2** - next will be Random Forests - *rf*
+
+```{r randomforest}
+model_randfor <- train(classe~., data=trainset, method="rf", trControl = control, tuneLength = 5)
+predict_randfor <- predict(model_randfor, validset)
+confmatrix_randfor <- confusionMatrix(predict_randfor, factor(validset$classe))
+confmatrix_randfor
+```
+
+Its overall Accuracy was **99.39%**.
+
+**Method #3** - next will be Gradient Boosted Trees - *gbm*
+
+```{r gradientboosted}
+model_gbm <- train(classe~., data=trainset, method="gbm", trControl = control, tuneLength = 5, verbose = F)
+predict_gbm <- predict(model_gbm, validset)
+confmatrix_gbm <- confusionMatrix(predict_gbm, factor(validset$classe))
+confmatrix_gbm
+```
+
+Its overall Accuracy was **98.81%**.
+
+**Method #4** - lastly, I will use Model-based Prediction: Linear
+Discriminant Analysis (LDA) - *lda*
+
+```{r lineardiscriminant}
+model_lda <- train(classe~., data=trainset, method="lda", trControl = control, tuneLength = 5, verbose = F)
+predict_lda <- predict(model_lda, validset)
+confmatrix_lda <- confusionMatrix(predict_lda, factor(validset$classe))
+confmatrix_lda
+```
+
+Its overall Accuracy was **69.45%.**
+
+## Results on Training (Validation) data sets
+
+Conclusion: The methodology (model) with the best accuracy was:
+
+-   Random Forests: 99.39%
+
+(But Gradient Boosted Trees was extremely close, if even slower:
+98.81%.)
+
+## Performing Prediction using X on the Test Data Set
+
+I will now apply the Random Forest model on the Test Data.
+
+```{r randfor_on_testset}
+predict_randfor_testdata <- predict(model_randfor, test_data_cleaned)
+predict_randfor_testdata
+```
+
+(These are the values I will submit to the Quiz.)
+
+## Appendix
+
+Plots of the four models
+
+```{r models_of_plots}
+plot(model_dtrees)
+plot(model_randfor)
+plot(model_gbm)
+plot(model_lda)
+```
+
+**END**
